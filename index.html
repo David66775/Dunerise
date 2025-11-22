@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Dunerise</title>
+<style>
+    body { margin: 0; overflow: hidden; background-color: #eee; }
+    canvas { display: block; background-color: skyblue;}
+
+    /* Hamburger Menu Icon Styling */
+    .menu-toggle {
+        position: absolute;
+        top: 20px;
+        right: 20px;
+        width: 50px;
+        height: 50px;
+        background-color: rgba(0, 0, 0, 0.5);
+        border-radius: 50%;
+        cursor: pointer;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        align-items: center;
+        z-index: 10;
+        transition: transform 0.3s;
+    }
+
+    .menu-toggle:hover {
+        transform: scale(1.1);
+    }
+
+    .bar {
+        width: 60%;
+        height: 4px;
+        background-color: white;
+        margin: 3px 0;
+        transition: 0.4s;
+    }
+
+    /* Menu Container Styling */
+    .menu-container {
+        position: fixed;
+        top: 0;
+        right: -300px; /* Start off-screen */
+        width: 300px;
+        height: 100%;
+        background-color: rgba(50, 50, 50, 0.95);
+        color: white;
+        padding: 20px;
+        box-sizing: border-box;
+        transition: right 0.4s ease;
+        z-index: 5;
+        font-family: sans-serif;
+    }
+
+    .menu-container.active {
+        right: 0; /* Slide in when active class is added */
+    }
+
+    .menu-container h2 {
+        margin-top: 50px; /* Space for the icon area */
+    }
+    
+    .menu-container div {
+        margin-bottom: 10px;
+        padding: 5px;
+        background-color: rgba(255, 255, 255, 0.1);
+        border-radius: 4px;
+    }
+
+    /* Transform hamburger to X when active */
+    .menu-toggle.active .bar:nth-child(2) {
+        opacity: 0;
+    }
+
+    .menu-toggle.active .bar:nth-child(1) {
+        transform: translateY(7px) rotate(45deg);
+    }
+
+    .menu-toggle.active .bar:nth-child(3) {
+        transform: translateY(-7px) rotate(-45deg);
+    }
+</style>
+</head>
+<body>
+
+<canvas id="gameCanvas"></canvas>
+
+<!-- Hamburger Menu Icon -->
+<div class="menu-toggle" id="menuToggle">
+    <div class="bar"></div>
+    <div class="bar"></div>
+    <div class="bar"></div>
+</div>
+
+<!-- Sliding Stats Menu -->
+<div class="menu-container" id="statsMenu">
+    <h2>Game Stats</h2>
+    <div>High Score: <span id="highScore">0</span></div>
+    <div>Total Movement: <span id="totalMovement">0</span></div>
+    <div>Times Played: <span id="timesPlayed">0</span></div>
+</div>
+
+<script>
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    const menuToggle = document.getElementById('menuToggle');
+    const statsMenu = document.getElementById('statsMenu');
+    let canvasWidth = window.innerWidth;
+    let canvasHeight = window.innerHeight;
+    canvas.width = canvasWidth;
+    canvas.height = canvasHeight;
+
+    const world = new Map();
+    const CHUNK_SIZE = 512;
+    const maxSteepness = 5;
+    const maxChange = 2;
+    const baseTerrainHeight = canvasHeight * 0.6;
+    const SPAWN_X = 50;
+    const SUN_RADIUS = 50;
+    const DIRT_COLOR = '#8B4513';
+    const GRASS_COLOR = '#e4dc8a';
+    const HOLE_CHANCE = 0.35; // 35% chance of a hole in a new chunk
+
+    // Game Stats
+    let highScore = parseInt(localStorage.getItem('highScore')) || 0;
+    let totalMovement = parseInt(localStorage.getItem('totalMovement')) || 0;
+    let timesPlayed = parseInt(localStorage.getItem('timesPlayed')) || 0;
+    let previousWorldX = SPAWN_X;
+
+    function generateChunk(chunkX, startHeight = baseTerrainHeight, startSteepness = 0) {
+        const chunkKey = chunkX;
+        if (world.has(chunkKey)) return;
+        const terrainData = [];
+        let currentHeight = startHeight;
+        let steepness = startSteepness;
+
+        // Determine if this chunk should have a hole
+        const hasHole = Math.random() < HOLE_CHANCE && chunkX > 0; // Don't put a hole in the start chunk
+        const holeStart = hasHole ? Math.floor(Math.random() * (CHUNK_SIZE - 50)) : -1;
+        const holeEnd = hasHole ? holeStart + 150 : -1;
+
+        for (let x = 0; x < CHUNK_SIZE; x++) {
+            if (hasHole && x >= holeStart && x <= holeEnd) {
+                // Create a clear vertical break for the hole
+                terrainData.push(canvasHeight + 100); 
+            } else {
+                steepness += (Math.random() - 0.5) * maxChange * 2;
+                if (steepness > maxSteepness) steepness = maxSteepness;
+                if (steepness < -maxSteepness) steepness = -maxSteepness;
+                currentHeight += steepness;
+                if (currentHeight > canvasHeight * 0.9) currentHeight = canvasHeight * 0.9;
+                if (currentHeight < canvasHeight * 0.3) currentHeight = canvasHeight * 0.3;
+                terrainData.push(currentHeight);
+            }
+        }
+        world.set(chunkKey, { x: chunkX * CHUNK_SIZE, data: terrainData, endHeight: currentHeight, endSteepness: steepness });
+    }
+
+    function getTerrainHeightAt(worldX) {
+        const chunkX = Math.floor(worldX / CHUNK_SIZE);
+        const localX = worldX % CHUNK_SIZE;
+        const chunk = world.get(chunkX);
+        if (chunk) {
+            return chunk.data[Math.floor(localX)];
+        }
+        return baseTerrainHeight;
+    }
+
+    const player = { x: 50, y: 0, radius: 10, speed: 5, vx: 0, vy: 0, gravity: 0.5, onGround: false, worldX: SPAWN_X };
+    var score = player.x / 100;
+    const camera = { x: 0 };
+    const keys = {};
+
+    function restartGame() {
+        // Reset player position and state
+        player.worldX = SPAWN_X;
+        player.y = 0;
+        player.vx = 0;
+        player.vy = 0;
+        player.onGround = false;
+        previousWorldX = SPAWN_X;
+        score = 0;
+
+        // Clear existing chunks and generate the starting chunk
+        world.clear();
+        generateChunk(0);
+
+        // Increment times played stat, handled in the main loop init logic
+    }
+
+    function updatePlayer() {
+        if (keys['a']) {
+            player.vx = -player.speed;
+        } else if (keys['d']) {
+            player.vx = player.speed;
+        } else {
+            player.vx = 0;
+        }
+        if (keys['w'] && player.onGround) {
+            player.vy = -10;
+            player.onGround = false;
+        }
+        player.worldX += player.vx;
+        player.y += player.vy;
+
+        // Check for restart condition (falling into a hole/off screen)
+        if (player.y > canvasHeight + 50) {
+            restartGame();
+            return;
+        }
+
+        if (player.worldX < SPAWN_X) {
+            player.worldX = SPAWN_X;
+        }
+        if (player.worldX > previousWorldX) {
+            totalMovement += (player.worldX - previousWorldX);
+        }
+        previousWorldX = player.worldX;
+        
+        const groundY = getTerrainHeightAt(player.worldX) - player.radius;
+        if (player.y >= groundY) {
+            player.y = groundY;
+            player.vy = 0;
+            player.onGround = true;
+        } else {
+            player.vy += player.gravity;
+            player.onGround = false;
+        }
+
+        score = Math.floor(player.worldX - SPAWN_X);
+        if (score > highScore) {
+            highScore = score;
+        }
+    }
+
+    function updateCameraAndChunks() {
+        camera.x = player.worldX - canvasWidth / 2;
+        const startChunkX = Math.floor(camera.x / CHUNK_SIZE);
+        const endChunkX = Math.floor((camera.x + canvasWidth) / CHUNK_SIZE);
+        for (let cx = startChunkX - 1; cx <= endChunkX + 1; cx++) {
+            if (!world.has(cx)) {
+                const prevChunk = world.get(cx - 1);
+                if (prevChunk) {
+                    generateChunk(cx, prevChunk.endHeight, prevChunk.endSteepness);
+                } else {
+                    generateChunk(cx);
+                }
+            }
+        }
+    }
+
+    function drawTerrain() {
+        ctx.fillStyle = DIRT_COLOR;
+        for (const [chunkKey, chunk] of world) {
+            if (chunk.x + CHUNK_SIZE > camera.x && chunk.x < camera.x + canvasWidth) {
+                ctx.beginPath();
+                ctx.moveTo(chunk.x - camera.x, canvasHeight);
+                for (let i = 0; i < CHUNK_SIZE; i++) {
+                    ctx.lineTo(chunk.x + i - camera.x, chunk.data[i]);
+                }
+                ctx.lineTo(chunk.x + CHUNK_SIZE - camera.x, canvasHeight);
+                ctx.closePath();
+                ctx.fill();
+                ctx.beginPath();
+                ctx.moveTo(chunk.x - camera.x, chunk.data);
+                for (let i = 0; i < CHUNK_SIZE; i++) {
+                    ctx.lineTo(chunk.x + i - camera.x, chunk.data[i] - 1); 
+                }
+                ctx.strokeStyle = GRASS_COLOR; 
+                ctx.lineWidth = 5;
+                ctx.stroke();
+            }
+        }
+    }
+
+    function drawPlayer() {
+        const screenX = player.worldX - camera.x;
+        ctx.beginPath();
+        ctx.arc(screenX, player.y, player.radius, 0, Math.PI * 2);
+        ctx.fillStyle = '#ff5733';
+        ctx.fill();
+        ctx.closePath();
+    }
+
+    function drawSun() {
+        const sunX = SUN_RADIUS + 30;
+        const sunY = SUN_RADIUS + 30;
+        ctx.beginPath();
+        ctx.arc(sunX, sunY, SUN_RADIUS, 0, Math.PI * 2);
+        ctx.fillStyle = '#FFD700';
+        ctx.fill();
+        ctx.closePath();
+        ctx.strokeStyle = '#FFD700';
+        ctx.lineWidth = 3;
+        const numRays = 16;
+        for (let i = 0; i < numRays; i++) {
+            const angle = (i / numRays) * Math.PI * 2;
+            const startX = sunX + Math.cos(angle) * (SUN_RADIUS + 5);
+            const startY = sunY + Math.sin(angle) * (SUN_RADIUS + 5);
+            const endX = sunX + Math.cos(angle) * (SUN_RADIUS + 25);
+            const endY = sunY + Math.sin(angle) * (SUN_RADIUS + 25);
+            ctx.beginPath();
+            ctx.moveTo(startX, startY);
+            ctx.lineTo(endX, endY);
+            ctx.stroke();
+        }
+    }
+
+    function displayScore() {
+        ctx.fillStyle = '#000000';
+        ctx.font = '40px Arial';
+        ctx.textAlign = 'center';
+        ctx.fillText(`Score: ${score}`, canvasWidth / 2, 50);
+    }
+
+    function updateStats() {
+        localStorage.setItem('highScore', highScore);
+        localStorage.setItem('totalMovement', Math.floor(totalMovement));
+        localStorage.setItem('timesPlayed', timesPlayed);
+        document.getElementById('highScore').textContent = highScore;
+        document.getElementById('totalMovement').textContent = Math.floor(totalMovement);
+        document.getElementById('timesPlayed').textContent = timesPlayed;
+    }
+
+    menuToggle.addEventListener('click', () => {
+        menuToggle.classList.toggle('active');
+        statsMenu.classList.toggle('active');
+    });
+
+    function gameLoop() {
+        ctx.clearRect(0, 0, canvasWidth, canvasHeight);
+        updatePlayer();
+        updateCameraAndChunks();
+        drawSun();
+        drawTerrain();
+        drawPlayer();
+        displayScore();
+        updateStats();
+        requestAnimationFrame(gameLoop);
+    }
+
+    window.addEventListener('resize', () => {
+        canvasWidth = window.innerWidth;
+        canvasHeight = window.innerHeight;
+        canvas.width = canvasWidth;
+        canvas.height = canvasHeight;
+        world.clear();
+        generateChunk(Math.floor(player.worldX / CHUNK_SIZE));
+    });
+
+    document.addEventListener('keydown', (e) => {
+        keys[e.key.toLowerCase()] = true;
+    });
+
+    document.addEventListener('keyup', (e) => {
+        keys[e.key.toLowerCase()] = false;
+    });
+
+    // Increment times played only once when the script first runs on page load
+    if (!localStorage.getItem('gameInitialized')) {
+        timesPlayed = 1;
+        localStorage.setItem('gameInitialized', true);
+    } else {
+         // Increment every time the page is loaded (which simulates a new play session)
+         timesPlayed++;
+    }
+    
+    generateChunk(0);
+    gameLoop();
+</script>
+</body>
