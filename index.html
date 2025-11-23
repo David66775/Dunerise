@@ -116,7 +116,7 @@ let previousWorldX = SPAWN_X;
 
 const playerConfigs = [
     { jump: 'w', left: 'a', right: 'd', color: '#ff5733' }, // Player 1
-    { jump: '5', left: 'r', right: 'y', color: '#33ff57' }, // Player 2
+    { jump: '5', left: 'r', right: 'y', color: '#006400' }, // Player 2
     { jump: 'o', left: 'k', right: ';', color: '#3357ff' }, // Player 3
     { jump: 'f', left: 'c', right: 'b', color: '#ff33aa' }, // Player 4
 ];
@@ -189,6 +189,7 @@ function restartGame(){
 // Player Movement
 const keys={};
 function updatePlayers(){
+    let sumWorldX = 0;
     players.forEach((player,i)=>{
         const config=playerConfigs[i];
 
@@ -224,15 +225,22 @@ function updatePlayers(){
 
         player.score=Math.floor(player.worldX-SPAWN_X);
         if(player.score>highScore) highScore=player.score;
-        if(player.worldX>previousWorldX) totalMovement+=(player.worldX-previousWorldX);
+
+        sumWorldX += player.worldX;
     });
-    previousWorldX=players[0].worldX;
+
+    // Compute average position for all players
+    const avgWorldX = sumWorldX / players.length;
+    if(avgWorldX>previousWorldX) totalMovement+=(avgWorldX-previousWorldX);
+    previousWorldX = avgWorldX;
 }
 
 // Camera and Terrain Chunks
 const camera={x:0};
 function updateCameraAndChunks(){
-    camera.x = players[0].worldX - canvasWidth/2;
+    // Center camera on the average position of all players
+    const avgX = players.reduce((sum,p)=>sum+p.worldX,0)/players.length;
+    camera.x = avgX - canvasWidth/2;
     camera.x = Math.max(0,camera.x);
 
     const startChunkX=Math.floor(camera.x/CHUNK_SIZE);
@@ -308,10 +316,11 @@ function drawSun(){
 }
 
 function displayScore(){
+    const avgScore = players.reduce((sum, p) => sum + p.score, 0) / players.length;
     ctx.fillStyle='#000';
     ctx.font='40px Arial';
     ctx.textAlign='center';
-    ctx.fillText(`Score: ${Math.floor(players[0].score)}`, canvasWidth/2, 50);
+    ctx.fillText(`Score: ${Math.floor(avgScore)}`, canvasWidth/2, 50);
 }
 
 function updateStats(){
