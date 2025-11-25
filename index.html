@@ -2,6 +2,8 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
+<script src="https://unpkg.com/yjs@13.6.10/dist/yjs.js"></script>
+<script src="https://unpkg.com/y-webrtc@10.3.10/dist/y-webrtc.js"></script>
 <title>Dunerise Multiplayer</title>
 <style>
     body { margin: 0; overflow: hidden; background-color: #eee; }
@@ -83,6 +85,19 @@
       <button onclick="setPlayerCount(3)">3</button>
       <button onclick="setPlayerCount(4)">4</button>
     </div>
+    <hr>
+<h3>Online Channel</h3>
+<input type="text" id="channelName" placeholder="Channel name" style="width:90%;padding:5px;margin-bottom:10px;">
+
+<button onclick="hostChannel()">Host</button>
+<button onclick="joinChannel()">Join</button>
+<input 
+    type="number" 
+    id="channel-input"
+    placeholder="Channel number"
+    style="width:90%;padding:5px;margin-bottom:10px;"
+>
+<div style="font-size:12px;margin-top:5px;">Up to 4 players per channel</div>
 </div>
 
 <script>
@@ -253,7 +268,141 @@ function updateCameraAndChunks(){
         }
     }
 }
+function hostChannel(){
+    const channelNumber = parseInt(document.getElementById("channel-input").value);
 
+    if(isNaN(channelNumber)){
+        alert("Enter a valid channel number!");
+        return;
+    }
+
+    isHost = true;
+
+    ydoc = new Y.Doc();
+
+    provider = new WebrtcProvider(
+        "dunerise-" + channelNumber,
+        ydoc
+    );
+
+    yPlayers = ydoc.getArray("players");
+
+    // Host initializes slots if empty
+    if(yPlayers.length === 0){
+        for(let i=0;i<4;i++){
+            yPlayers.push([SPAWN_X, 0, false, 0]);
+        }
+    }
+
+    // Host is always slot 0
+    myPlayerIndex = 0;
+
+    maxPlayers = 4;
+    restartGame();
+
+    console.log("Channel hosted:", channelNumber);
+}
+    function pickFreeSlot(){
+    for(let i = 0; i < yPlayers.length; i++){
+        let p = yPlayers.get(i);
+
+        // If position still at initial spawn = unused slot
+        if(p[0] === SPAWN_X && p[1] === 0){
+            return i;
+        }
+    }
+    return -1; // No open slot
+}
+    function joinChannel(){
+
+    const channelNumber = parseInt(document.getElementById("channel-input").value);
+
+    if(isNaN(channelNumber)){
+        alert("Enter a valid channel number!");
+        return;
+    }
+
+    isHost = false;
+
+    // Create a new Yjs document instance
+    ydoc = new Y.Doc();
+
+    // Connect to the WebRTC room
+    provider = new WebrtcProvider(
+        "dunerise-" + channelNumber,
+        ydoc
+    );
+
+    // Shared array of up to 4 player slots
+    yPlayers = ydoc.getArray("players");
+
+    console.log("Connecting to channel:", channelNumber);
+
+    //
+    // We wait until host has created player slots
+    //
+    const waitForHost = setInterval(() => {
+
+        // Host should have already created 4 slots
+        if(yPlayers.length >= 4){
+
+            clearInterval(waitForHost);
+
+            // Find an open slot
+            myPlayerIndex = pickFreeSlot();
+
+            if(myPlayerIndex === -1){
+                alert("This channel is full (4 players).");
+                return;
+            }
+
+            maxPlayers = 4;
+
+            console.log(
+                "Joined channel:",
+                channelNumber,
+                " → Assigned slot:",
+                myPlayerIndex
+            );
+
+            restartGame();
+        }
+
+    }, 300);
+}
+function joinChannel(){
+    const channelNumber = parseInt(document.getElementById("channel-input").value);
+
+    if(isNaN(channelNumber)){
+        alert("Enter a valid channel number!");
+        return;
+    }
+
+    isHost = false;
+
+    ydoc = new Y.Doc();
+
+    provider = new WebrtcProvider(
+        "dunerise-" + channelNumber,
+        ydoc
+    );
+
+    yPlayers = ydoc.getArray("players");
+
+    const waitForHost = setInterval(() => {
+        if(yPlayers.length >= 1){
+
+            clearInterval(waitForHost);
+
+            myPlayerIndex = pickFreeSlot();
+
+            maxPlayers = 4;
+            restartGame();
+
+            console.log("Joined channel:", channelNumber, "Slot:", myPlayerIndex);
+        }
+    }, 300);
+}
 // Drawing
 function drawTerrain(){
     ctx.fillStyle=DIRT_COLOR;
