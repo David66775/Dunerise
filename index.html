@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <title>Dunerise Multiplayer</title>
 
-<!-- Correct browser-friendly Y.js + WebRTC versions -->
+<!-- Browser-friendly YJS + WebRTC -->
 <script src="https://cdn.jsdelivr.net/npm/yjs@13.5.39/dist/yjs.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/y-webrtc@10.3.10/dist/y-webrtc.js"></script>
 
@@ -38,23 +38,76 @@
 
 <script>
 // =====================================================================
-//  GLOBALS
+//  MULTIPLAYER GLOBALS
 // =====================================================================
 let doc = null;
 let provider = null;
-let players = {};
 let myId = Math.random().toString(36).slice(2);
+let players = {};
+let yPlayers = null;
 let channel = null;
 
-// Reference shared Y map
-let yPlayers = null;
-
 // =====================================================================
-//  SETUP CANVAS + DRAW LOOP (LANDSCAPE VISIBLE)
+//  CANVAS SETUP
 // =====================================================================
 const canvas = document.getElementById("gameCanvas");
 const ctx = canvas.getContext("2d");
 
+// =====================================================================
+//  TERRAIN GENERATION (RANDOM WALK SCROLLING)
+// =====================================================================
+
+const SEGMENT_WIDTH = 10;
+const TERRAIN_LENGTH = 300;
+let terrain = [];
+let scrollX = 0;
+
+// Generate a random walk terrain segment list
+function generateTerrain() {
+    terrain = [];
+    let h = canvas.height * 0.75; // start height
+
+    for (let i = 0; i < TERRAIN_LENGTH; i++) {
+        // Random walk step
+        h += (Math.random() * 20 - 10);
+
+        // Clamp to reasonable range
+        h = Math.max(canvas.height * 0.3, Math.min(canvas.height * 0.95, h));
+
+        terrain.push(h);
+    }
+}
+
+// Draw terrain as a polygon
+function drawTerrain(color, offset, heightScale = 1, baseY = 0) {
+    ctx.fillStyle = color;
+    ctx.beginPath();
+
+    let x = 0;
+    ctx.moveTo(0, canvas.height);
+
+    for (let i = 0; i < terrain.length; i++) {
+        let terrX = (i * SEGMENT_WIDTH) - offset;
+        let terrY = terrain[i] * heightScale + baseY;
+
+        ctx.lineTo(terrX, terrY);
+    }
+
+    ctx.lineTo(canvas.width, canvas.height);
+    ctx.closePath();
+    ctx.fill();
+}
+
+// Make sure players stand on ground (simple collision)
+function getGroundHeight(x) {
+    let index = Math.floor((x + scrollX) / SEGMENT_WIDTH);
+    if (index < 0 || index >= terrain.length) return canvas.height;
+    return terrain[index];
+}
+
+// =====================================================================
+//  DRAW LOOP
+// =====================================================================
 function draw() {
     requestAnimationFrame(draw);
 
@@ -62,36 +115,50 @@ function draw() {
     ctx.fillStyle = "#87ceeb";
     ctx.fillRect(0,0,canvas.width,canvas.height);
 
-    // Sand ground
-    ctx.fillStyle = "#E5C56B";
-    ctx.fillRect(0, canvas.height * 0.75, canvas.width, canvas.height * 0.25);
+    // Scroll terrain left over time
+    scrollX += 2;
+    if (scrollX > SEGMENT_WIDTH) {
+        scrollX -= SEGMENT_WIDTH;
+        // Roll terrain forward and add another point
+        terrain.shift();
 
-    // Cactus (just decoration)
-    ctx.fillStyle = "#3B7A3A";
-    ctx.fillRect(200, canvas.height * 0.55, 40, 120);
+        let lastHeight = terrain[terrain.length - 1];
+        let newHeight = lastHeight + (Math.random() * 20 - 10);
+        newHeight = Math.max(canvas.height * 0.3, Math.min(canvas.height * 0.95, newHeight));
+        terrain.push(newHeight);
+    }
 
-    // Draw each player
+    // Draw far dunes (layered depth)
+    drawTerrain("#d6b574", scrollX * 0.4, 0.9, -80);
+
+    // Draw main ground
+    drawTerrain("#e5c56b", scrollX);
+
+    // Draw players
     for (let id in players) {
         let p = players[id];
         ctx.fillStyle = p.color;
-        ctx.fillRect(p.x, p.y, 40, 40);
+        ctx.fillRect(p.x - scrollX, p.y - 40, 40, 40);
     }
 }
+
+// Start terrain generation
+generateTerrain();
 draw();
 
 // =====================================================================
-//  MULTIPLAYER SETUP FUNCTIONS
+//  MULTIPLAYER SETUP
 // =====================================================================
 
 function initSharedState() {
     yPlayers = doc.getMap("players");
 
-    // Load existing players
+    // Load existing
     yPlayers.forEach((data, id) => {
         players[id] = data;
     });
 
-    // Listen for updates
+    // Listen for future changes
     yPlayers.observe(event => {
         event.changes.keys.forEach((change, key) => {
             if (change.action === "add" || change.action === "update") {
@@ -105,43 +172,36 @@ function initSharedState() {
     // Spawn yourself
     yPlayers.set(myId, {
         x: 400 + Math.random() * 200,
-        y: 500,
+        y: 0,
         color: "#" + Math.floor(Math.random() * 0xffffff).toString(16)
     });
 }
 
 function hostChannel() {
     channel = document.getElementById("channel-input").value;
-    if (!channel) {
-        alert("Enter a channel number first.");
-        return;
-    }
+    if (!channel) return alert("Enter a channel first.");
 
     doc = new Y.Doc();
     provider = new WebrtcProvider("dunerise_" + channel, doc);
 
     initSharedState();
-    console.log("Hosting channel:", channel);
+    console.log("Hosting:", channel);
 }
 
 function joinChannel() {
     channel = document.getElementById("channel-input").value;
-    if (!channel) {
-        alert("Enter a channel number first.");
-        return;
-    }
+    if (!channel) return alert("Enter a channel first.");
 
     doc = new Y.Doc();
     provider = new WebrtcProvider("dunerise_" + channel, doc);
 
     initSharedState();
-    console.log("Joined channel:", channel);
+    console.log("Joined:", channel);
 }
 
 // =====================================================================
-//  MOVEMENT
+//  MOVEMENT + GROUND COLLISION
 // =====================================================================
-
 document.addEventListener("keydown", e => {
     if (!yPlayers) return;
 
@@ -150,6 +210,10 @@ document.addEventListener("keydown", e => {
 
     if (e.key === "ArrowLeft")  me.x -= 10;
     if (e.key === "ArrowRight") me.x += 10;
+
+    // Keep on ground
+    let groundY = getGroundHeight(me.x);
+    me.y = groundY;
 
     yPlayers.set(myId, me);
 });
