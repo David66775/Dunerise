@@ -2,304 +2,158 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
+<title>Dunerise Multiplayer</title>
 
-<!-- Correct browser-safe Y.js + WebRTC scripts -->
+<!-- Correct browser-friendly Y.js + WebRTC versions -->
 <script src="https://cdn.jsdelivr.net/npm/yjs@13.5.39/dist/yjs.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/y-webrtc@10.3.10/dist/y-webrtc.js"></script>
 
-<title>Dunerise Multiplayer</title>
 <style>
-    body { margin: 0; overflow: hidden; background-color: #eee; }
-    canvas { display: block; background-color: skyblue;}
+    body { margin:0; overflow:hidden; background:#87ceeb; }
+    canvas { display:block; }
 
-    /* Hamburger Menu Icon Styling */
-    .menu-toggle {
-        position: absolute;
-        top: 20px;
-        right: 20px;
-        width: 50px;
-        height: 50px;
-        background-color: rgba(0, 0, 0, 0.5);
-        border-radius: 50%;
-        cursor: pointer;
-        display: flex;
-        flex-direction: column;
-        justify-content: center;
-        align-items: center;
-        z-index: 10;
-        transition: transform 0.3s;
+    .menu {
+        position:absolute;
+        top:20px;
+        right:20px;
+        background:white;
+        padding:12px;
+        border-radius:10px;
+        border:1px solid #aaa;
+        font-family:Arial, sans-serif;
     }
-    .menu-toggle:hover { transform: scale(1.1); }
-    .bar {
-        width: 60%;
-        height: 4px;
-        background-color: white;
-        margin: 3px 0;
-        transition: 0.4s;
-    }
-    .menu-toggle.active .bar:nth-child(2) { opacity: 0; }
-    .menu-toggle.active .bar:nth-child(1) { transform: translateY(7px) rotate(45deg); }
-    .menu-toggle.active .bar:nth-child(3) { transform: translateY(-7px) rotate(-45deg); }
-
-    /* Menu Container Styling */
-    .menu-container {
-        position: fixed;
-        top: 0;
-        right: -300px; 
-        width: 300px;
-        height: 100%;
-        background-color: rgba(50, 50, 50, 0.95);
-        color: white;
-        padding: 20px;
-        box-sizing: border-box;
-        transition: right 0.4s ease;
-        z-index: 5;
-        font-family: sans-serif;
-    }
-    .menu-container.active { right: 0; }
-    .menu-container h2 { margin-top: 50px; }
-    .menu-container div { margin-bottom: 10px; padding: 5px; background-color: rgba(255,255,255,0.1); border-radius:4px; }
-    .menu-container button { margin: 5px 2px; padding: 5px 10px; border:none; border-radius:4px; cursor:pointer; background-color:#666; color:white; }
-    .menu-container button:hover { background-color:#888; }
+    button { margin:4px 0; width:120px; }
 </style>
 </head>
 <body>
 
-<canvas id="gameCanvas"></canvas>
+<canvas id="gameCanvas" width="1280" height="720"></canvas>
 
-<!-- Hamburger Menu Icon -->
-<div class="menu-toggle" id="menuToggle">
-    <div class="bar"></div>
-    <div class="bar"></div>
-    <div class="bar"></div>
-</div>
-
-<!-- Sliding Stats Menu -->
-<div class="menu-container" id="statsMenu">
-    <h2>Game Stats</h2>
-    <div>High Score: <span id="highScore">0</span></div>
-    <div>Total Movement: <span id="totalMovement">0</span></div>
-    <div>Times Played: <span id="timesPlayed">0</span></div>
-
-    <hr>
-
-    <h3>Number of Local Players</h3>
-    <div>
-      <button onclick="setPlayerCount(1)">1</button>
-      <button onclick="setPlayerCount(2)">2</button>
-      <button onclick="setPlayerCount(3)">3</button>
-      <button onclick="setPlayerCount(4)">4</button>
-    </div>
-
-    <hr>
-
-    <h3>Online Channel</h3>
-    <input 
-        type="number"
-        id="channel-input"
-        placeholder="Channel number"
-        style="width:90%;padding:5px;margin-bottom:10px;"
-    >
-
+<div class="menu">
+    <input id="channel-input" type="number" placeholder="Channel #" style="width:110px;">
+    <br>
     <button onclick="hostChannel()">Host</button>
     <button onclick="joinChannel()">Join</button>
-
-    <div style="font-size:12px;margin-top:5px;">
-        Up to 4 players per channel
-    </div>
 </div>
 
 <script>
-/* ------------------ GAME SETUP ------------------ */
+// =====================================================================
+//  GLOBALS
+// =====================================================================
+let doc = null;
+let provider = null;
+let players = {};
+let myId = Math.random().toString(36).slice(2);
+let channel = null;
 
-const canvas = document.getElementById('gameCanvas');
-const ctx = canvas.getContext('2d');
-const menuToggle = document.getElementById('menuToggle');
-const statsMenu = document.getElementById('statsMenu');
+// Reference shared Y map
+let yPlayers = null;
 
-let canvasWidth = window.innerWidth;
-let canvasHeight = window.innerHeight;
-canvas.width = canvasWidth;
-canvas.height = canvasHeight;
+// =====================================================================
+//  SETUP CANVAS + DRAW LOOP (LANDSCAPE VISIBLE)
+// =====================================================================
+const canvas = document.getElementById("gameCanvas");
+const ctx = canvas.getContext("2d");
 
-const world = new Map();
-const CHUNK_SIZE = 512;
-const baseTerrainHeight = canvasHeight * 0.6;
-const SPAWN_X = 50;
+function draw() {
+    requestAnimationFrame(draw);
 
-let highScore = parseInt(localStorage.getItem('highScore')) || 0;
-let totalMovement = parseInt(localStorage.getItem('totalMovement')) || 0;
-let timesPlayed = parseInt(localStorage.getItem('timesPlayed')) || 0;
+    // Sky
+    ctx.fillStyle = "#87ceeb";
+    ctx.fillRect(0,0,canvas.width,canvas.height);
 
-let previousWorldX = SPAWN_X;
+    // Sand ground
+    ctx.fillStyle = "#E5C56B";
+    ctx.fillRect(0, canvas.height * 0.75, canvas.width, canvas.height * 0.25);
 
-const playerConfigs = [
-    { jump: 'w', left: 'a', right: 'd', color: '#ff5733' },
-    { jump: '5', left: 'r', right: 'y', color: '#006400' },
-    { jump: 'o', left: 'k', right: ';', color: '#3357ff' },
-    { jump: 'f', left: 'c', right: 'b', color: '#ff33aa' },
-];
+    // Cactus (just decoration)
+    ctx.fillStyle = "#3B7A3A";
+    ctx.fillRect(200, canvas.height * 0.55, 40, 120);
 
-let players = [];
-let maxPlayers = 1;
-
-/* ------------------ MULTIPLAYER (YJS) ------------------ */
-
-let ydoc;
-let provider;
-let yPlayers;
-let myPlayerIndex = 0;
-let isHost = false;
-
-function hostChannel(){
-    const channelNumber = parseInt(document.getElementById("channel-input").value);
-
-    if(isNaN(channelNumber)){
-        alert("Enter a valid channel number!");
-        return;
-    }
-
-    isHost = true;
-
-    ydoc = new Y.Doc();
-    provider = new WebrtcProvider("dunerise-" + channelNumber, ydoc);
-    yPlayers = ydoc.getArray("players");
-
-    if(yPlayers.length === 0){
-        for(let i=0;i<4;i++){
-            yPlayers.push([SPAWN_X, 0, false, 0]);
-        }
-    }
-
-    myPlayerIndex = 0;
-
-    maxPlayers = 4;
-    restartGame();
-
-    console.log("Channel hosted:", channelNumber);
-}
-
-function pickFreeSlot(){
-    for(let i = 0; i < yPlayers.length; i++){
-        let p = yPlayers.get(i);
-        if(p[0] === SPAWN_X && p[1] === 0){
-            return i;
-        }
-    }
-    return -1;
-}
-
-function joinChannel(){
-    const channelNumber = parseInt(document.getElementById("channel-input").value);
-
-    if(isNaN(channelNumber)){
-        alert("Enter a valid channel number!");
-        return;
-    }
-
-    isHost = false;
-
-    ydoc = new Y.Doc();
-    provider = new WebrtcProvider("dunerise-" + channelNumber, ydoc);
-    yPlayers = ydoc.getArray("players");
-
-    const waitForHost = setInterval(() => {
-        if(yPlayers.length >= 1){
-            clearInterval(waitForHost);
-            myPlayerIndex = pickFreeSlot();
-            maxPlayers = 4;
-            restartGame();
-            console.log("Joined channel", channelNumber, "Slot:", myPlayerIndex);
-        }
-    }, 300);
-}
-
-/* ------------------ GAME LOGIC ------------------ */
-
-function setPlayerCount(count){
-    maxPlayers = count;
-    restartGame();
-}
-
-function restartGame(){
-    players = [];
-    for(let i=0;i<maxPlayers;i++){
-        players.push({
-            id:i,
-            x:50,
-            y:0,
-            radius:10,
-            speed:5,
-            vx:0,
-            vy:0,
-            gravity:0.5,
-            onGround:false,
-            worldX:SPAWN_X,
-            color:playerConfigs[i].color,
-            score:0
-        });
-    }
-}
-
-const keys={};
-
-function updatePlayers(){
-    players.forEach((player,i)=>{
-        const config = playerConfigs[i];
-
-        if(keys[config.left]) player.vx = -player.speed;
-        else if(keys[config.right]) player.vx = player.speed;
-        else player.vx = 0;
-
-        if(keys[config.jump] && player.onGround){
-            player.vy=-10;
-            player.onGround=false;
-        }
-
-        player.worldX += player.vx;
-        player.y += player.vy;
-
-        if(player.y > canvasHeight){
-            player.y = 0;
-            player.worldX = SPAWN_X;
-        }
-
-        player.vy += player.gravity;
-    });
-}
-
-function drawPlayers(){
-    players.forEach(p=>{
-        ctx.beginPath();
-        ctx.arc(p.worldX, p.y, p.radius, 0, Math.PI*2);
+    // Draw each player
+    for (let id in players) {
+        let p = players[id];
         ctx.fillStyle = p.color;
-        ctx.fill();
+        ctx.fillRect(p.x, p.y, 40, 40);
+    }
+}
+draw();
+
+// =====================================================================
+//  MULTIPLAYER SETUP FUNCTIONS
+// =====================================================================
+
+function initSharedState() {
+    yPlayers = doc.getMap("players");
+
+    // Load existing players
+    yPlayers.forEach((data, id) => {
+        players[id] = data;
+    });
+
+    // Listen for updates
+    yPlayers.observe(event => {
+        event.changes.keys.forEach((change, key) => {
+            if (change.action === "add" || change.action === "update") {
+                players[key] = yPlayers.get(key);
+            } else if (change.action === "delete") {
+                delete players[key];
+            }
+        });
+    });
+
+    // Spawn yourself
+    yPlayers.set(myId, {
+        x: 400 + Math.random() * 200,
+        y: 500,
+        color: "#" + Math.floor(Math.random() * 0xffffff).toString(16)
     });
 }
 
-function gameLoop(){
-    ctx.clearRect(0,0,canvasWidth,canvasHeight);
-    updatePlayers();
-    drawPlayers();
-    requestAnimationFrame(gameLoop);
+function hostChannel() {
+    channel = document.getElementById("channel-input").value;
+    if (!channel) {
+        alert("Enter a channel number first.");
+        return;
+    }
+
+    doc = new Y.Doc();
+    provider = new WebrtcProvider("dunerise_" + channel, doc);
+
+    initSharedState();
+    console.log("Hosting channel:", channel);
 }
 
-/* ------------------ INPUT ------------------ */
+function joinChannel() {
+    channel = document.getElementById("channel-input").value;
+    if (!channel) {
+        alert("Enter a channel number first.");
+        return;
+    }
 
-document.addEventListener('keydown',(e)=>{ keys[e.key.toLowerCase()]=true; });
-document.addEventListener('keyup',(e)=>{ keys[e.key.toLowerCase()]=false; });
+    doc = new Y.Doc();
+    provider = new WebrtcProvider("dunerise_" + channel, doc);
 
-/* ------------------ MENU ------------------ */
+    initSharedState();
+    console.log("Joined channel:", channel);
+}
 
-menuToggle.addEventListener('click',()=>{
-    menuToggle.classList.toggle('active');
-    statsMenu.classList.toggle('active');
+// =====================================================================
+//  MOVEMENT
+// =====================================================================
+
+document.addEventListener("keydown", e => {
+    if (!yPlayers) return;
+
+    let me = yPlayers.get(myId);
+    if (!me) return;
+
+    if (e.key === "ArrowLeft")  me.x -= 10;
+    if (e.key === "ArrowRight") me.x += 10;
+
+    yPlayers.set(myId, me);
 });
-
-/* ------------------ START ------------------ */
-
-restartGame();
-gameLoop();
 </script>
+
 </body>
 </html>
